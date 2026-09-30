@@ -100,9 +100,10 @@ export function positionsOnWorldWaterPlane(original:ArrayLike<number>,world:Matr
  for(let i=0;i<p.length;i+=3){Vector3.TransformCoordinatesFromFloatsToRef(p[i],p[i+1],p[i+2],world,point);point.y=height;Vector3.TransformCoordinatesToRef(point,inverse,local);local.toArray(p,i);}
  return p;
 }
-export function createBayWater(scene:Scene,mirror:MirrorTexture,meshes:AbstractMesh[],meta:CoastalManifest){
- const material=new PBRMaterial('living-bay',scene);material.albedoColor=new Color3(.025,.095,.105);material.metallic=0;material.roughness=.13;material.indexOfRefraction=1.333;material.metallicF0Factor=1;material.reflectionTexture=mirror;material.environmentIntensity=1;material.maxSimultaneousLights=2;material.enableSpecularAntiAliasing=true;material.backFaceCulling=false;
- const state:BayState={time:0,night:0,shore:null as unknown as Texture,extent:meta.shoreDistance.extent,ready:false,mode:'sunset',sky:scene.environmentTexture,skyColor:Color3.White(),skyEnabled:false};state.shore=new Texture(meta.shoreDistance.url,scene,{invertY:false,gammaSpace:false,samplingMode:Texture.TRILINEAR_SAMPLINGMODE,onLoad:()=>{state.ready=true;}});state.shore.wrapU=state.shore.wrapV=Texture.CLAMP_ADDRESSMODE;new BaySurface(material,state);
+export function createBayWater(scene:Scene,mirror:MirrorTexture,meshes:AbstractMesh[],meta:CoastalManifest,options:{reflections?:boolean}={}){
+ const reflections=options.reflections??true;
+ const material=new PBRMaterial('living-bay',scene);material.albedoColor=reflections?new Color3(.025,.095,.105):new Color3(.55,.80,.86);material.metallic=0;material.roughness=reflections?.13:1;material.unlit=!reflections;material.indexOfRefraction=1.333;material.metallicF0Factor=1;material.reflectionTexture=reflections?mirror:null;material.environmentIntensity=reflections?1:.35;material.maxSimultaneousLights=2;material.enableSpecularAntiAliasing=reflections;material.backFaceCulling=false;
+ const state:BayState={time:0,night:0,shore:null as unknown as Texture,extent:meta.shoreDistance.extent,ready:false,mode:'sunset',sky:scene.environmentTexture,skyColor:Color3.White(),skyEnabled:false};state.shore=new Texture(meta.shoreDistance.url,scene,{invertY:false,gammaSpace:false,samplingMode:Texture.TRILINEAR_SAMPLINGMODE,onLoad:()=>{state.ready=true;}});state.shore.wrapU=state.shore.wrapV=Texture.CLAMP_ADDRESSMODE;if(reflections)new BaySurface(material,state);
  for(const mesh of meshes){const original=mesh.getVerticesData(VertexBuffer.PositionKind);if(original){mesh.setVerticesData(VertexBuffer.PositionKind,positionsOnWorldWaterPlane(original,mesh.computeWorldMatrix(true),meta.waterHeight),false);mesh.refreshBoundingInfo({applySkeleton:false});}mesh.material=material;mesh.receiveShadows=false;}
  // The original mainland reaches farther north than its water mesh. Starting
  // this ring at water-only bounds put sea just 25cm below that entire backdrop,
@@ -122,15 +123,14 @@ export function createBayWater(scene:Scene,mirror:MirrorTexture,meshes:AbstractM
  extension.material=material;extension.isPickable=false;extension.receiveShadows=false;extension.freezeWorldMatrix();meshes.push(extension);
  // The existing RTT already has mipmaps; blending adjacent levels prevents
  // reflection shimmer without another reflection pass or a larger texture.
- mirror.updateSamplingMode(Texture.TRILINEAR_SAMPLINGMODE);
- mirror.mirrorPlane.d=meta.waterHeight;mirror.level=.92;
+ if(reflections){mirror.updateSamplingMode(Texture.TRILINEAR_SAMPLINGMODE);mirror.mirrorPlane.d=meta.waterHeight;mirror.level=.92;}
  const setMode=(mode:CinematicLightingMode)=>{
-  state.mode=mode;state.night=mode==='night'?1:0;material.environmentIntensity=state.night?.78:1;
+  state.mode=mode;state.night=mode==='night'?1:0;material.environmentIntensity=reflections?(state.night?.78:1):(state.night?.25:.35);
   const sky=scene.getMeshByName('atmosphere')?.material;
   state.skyEnabled=mode==='day'&&sky instanceof BackgroundMaterial&&!!sky.reflectionTexture?.isCube;
   if(sky instanceof BackgroundMaterial&&sky.reflectionTexture?.isCube){state.sky=sky.reflectionTexture;state.skyColor.copyFrom(sky.primaryColor);}
  };
  const setNight=(night:boolean)=>setMode(night?'night':'sunset');
  scene.onDisposeObservable.addOnce(()=>{extension.dispose(false,false);state.shore.dispose();material.dispose(false,false);});
- return {material,update:(time:number)=>{state.time=time;},setMode,setNight,stats:()=>({meshWorldHeights:meshes.map(m=>({min:m.getBoundingInfo().boundingBox.minimumWorld.y,max:m.getBoundingInfo().boundingBox.maximumWorld.y})),horizonCoverageBounds:bounds.length?[x0,z0,x1,z1]:null,horizonAtmosphere:{enabled:state.skyEnabled,source:state.sky?.name??null,start:1800,end:14000,extraRenderTargets:0,extraGeometry:0},shoreTextureReady:state.ready,waterLevel:meta.waterHeight,planarLevel:mirror.mirrorPlane.d,normalScale:'world-metres, four wind components, pixel-footprint filtered',reflectionFiltering:'trilinear mipmaps with projected pixel footprint',subpixelWaves:'slope variance retained as roughness',lighting:'PBR with moon/sun specular; vehicle headlights excluded',mode:state.mode,night:!!state.night})};
+ return {material,update:(time:number)=>{state.time=time;},setMode,setNight,stats:()=>({meshWorldHeights:meshes.map(m=>({min:m.getBoundingInfo().boundingBox.minimumWorld.y,max:m.getBoundingInfo().boundingBox.maximumWorld.y})),horizonCoverageBounds:bounds.length?[x0,z0,x1,z1]:null,horizonAtmosphere:{enabled:state.skyEnabled,source:state.sky?.name??null,start:1800,end:14000,extraRenderTargets:0,extraGeometry:0},shoreTextureReady:state.ready,waterLevel:meta.waterHeight,planarLevel:mirror.mirrorPlane.d,normalScale:'world-metres, four wind components, pixel-footprint filtered',reflectionFiltering:reflections?'trilinear mipmaps with projected pixel footprint':'disabled',subpixelWaves:'slope variance retained as roughness',lighting:'PBR with moon/sun specular; vehicle headlights excluded',mode:state.mode,night:!!state.night})};
 }

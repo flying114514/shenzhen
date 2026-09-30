@@ -6,8 +6,8 @@ export class CityFacadeStream{
  tiles:Tile[]=[];resident=new Map<string,Resident>();pending=false;focus={x:0,z:0};visible=true;failed=new Set<string>();
  private loadDelay=0;private focusChangedAt=0;private pumpTimer:ReturnType<typeof setTimeout>|null=null;private disposed=false;
  constructor(private scene:Scene,private changed:()=>void,private applyArchitecture?:(meshes:AbstractMesh[],assetName:string)=>void){scene.onDisposeObservable.addOnce(()=>{this.disposed=true;if(this.pumpTimer!==null)clearTimeout(this.pumpTimer);});}
- async init(x:number,z:number){const response=await fetch('/city/facade-tiles.json');if(!response.ok)throw Error('精细立面索引未能载入');this.tiles=(await response.json()).tiles;this.focus={x,z};
-  for(const t of this.near(700))await this.load(t);
+ async init(x:number,z:number,initialRadius=700){const response=await fetch('/city/facade-tiles.json');if(!response.ok)throw Error('精细立面索引未能载入');this.tiles=(await response.json()).tiles;this.focus={x,z};
+  for(const t of this.near(initialRadius))await this.load(t);
  }
  private near(radius:number){return this.tiles.filter(t=>Math.hypot(t.x-this.focus.x,t.z-this.focus.z)<radius).sort((a,b)=>Math.hypot(a.x-this.focus.x,a.z-this.focus.z)-Math.hypot(b.x-this.focus.x,b.z-this.focus.z));}
  /** Cheap per-frame motion signal; tile visibility still updates at a lower rate. */

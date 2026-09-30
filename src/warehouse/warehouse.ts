@@ -1,15 +1,17 @@
 import {
  AbstractMesh,Color3,DynamicTexture,Mesh,MeshBuilder,PBRMaterial,Scene,StandardMaterial,TransformNode,Vector3,
 } from '@babylonjs/core';
+import type {FleetStation} from '../low-altitude-stations.ts';
+import {FLEET_STATIONS} from '../low-altitude-stations.ts';
 
 export const SHENZHEN_WAREHOUSE={
  id:'nanshan-low-altitude-hub-01',
  name:'南山区低空物流中心',
  code:'SZ-L01',
  district:'深圳 · 南山',
- x:-2600,
- z:-775,
- heading:-.18,
+ x:-2417.55,
+ z:-175.26,
+ heading:.18,
  capacity:12,
  pads:5,
 } as const;
@@ -19,10 +21,17 @@ export const WAREHOUSE_PAD_LAYOUT=[
  new Vector3(-18,.76,1.5),new Vector3(-6,.76,1.5),
 ] as const;
 
+export function warehousePadWorld(station:FleetStation,groundHeight:(x:number,z:number)=>number,index=0){
+ const local=WAREHOUSE_PAD_LAYOUT[Math.max(0,Math.min(WAREHOUSE_PAD_LAYOUT.length-1,index))];
+ // Babylon's Y rotation: x'=x*cos+z*sin, z'=-x*sin+z*cos.
+ // Match landingPadWorld's TransformCoordinates exactly.
+ const c=Math.cos(station.heading),s=Math.sin(station.heading);
+ return {x:station.x+local.x*c+local.z*s,y:groundHeight(station.x,station.z)+.08+local.y,z:station.z-local.x*s+local.z*c};
+}
+
 export function warehouseReserved(x:number,z:number,radius=0){
- const dx=x-SHENZHEN_WAREHOUSE.x,dz=z-SHENZHEN_WAREHOUSE.z,c=Math.cos(SHENZHEN_WAREHOUSE.heading),s=Math.sin(SHENZHEN_WAREHOUSE.heading);
- const localX=dx*c-dz*s,localZ=dx*s+dz*c;
- return Math.abs(localX)<=34+radius&&Math.abs(localZ)<=21+radius;
+ for(const station of FLEET_STATIONS){const dx=x-station.x,dz=z-station.z,c=Math.cos(station.heading),s=Math.sin(station.heading),localX=dx*c-dz*s,localZ=dx*s+dz*c;if(Math.abs(localX)<=34+radius&&Math.abs(localZ)<=21+radius)return true;}
+ return false;
 }
 
 type WarehouseMaterials={surface:PBRMaterial;structure:PBRMaterial;glass:PBRMaterial;accent:PBRMaterial;warning:PBRMaterial;cargo:PBRMaterial;sign:StandardMaterial};
@@ -33,10 +42,10 @@ function pbr(scene:Scene,name:string,color:Color3,metallic:number,roughness:numb
  return material;
 }
 
-function makeMaterials(scene:Scene):WarehouseMaterials{
- const signTexture=new DynamicTexture('warehouse-sign-texture',{width:1024,height:256},scene,false);
- const context=signTexture.getContext();context.fillStyle='#07171b';context.fillRect(0,0,1024,256);context.fillStyle='#77f5d1';context.font='700 72px "Microsoft YaHei", sans-serif';context.fillText('南山区低空物流中心',54,112);context.fillStyle='#9cb5b2';context.font='32px Arial, sans-serif';context.fillText('SHENZHEN LOW-ALTITUDE LOGISTICS  ·  SZ-L01',58,181);signTexture.update();
- const sign=new StandardMaterial('warehouse-sign',scene);sign.diffuseTexture=signTexture;sign.emissiveTexture=signTexture;sign.disableLighting=true;
+function makeMaterials(scene:Scene,station:FleetStation):WarehouseMaterials{
+ const signTexture=new DynamicTexture('warehouse-sign-texture-'+station.code,{width:1024,height:256},scene,false);
+ const context=signTexture.getContext();context.fillStyle='#07171b';context.fillRect(0,0,1024,256);context.fillStyle='#77f5d1';context.font='700 72px "Microsoft YaHei", sans-serif';context.fillText(station.name,54,112);context.fillStyle='#9cb5b2';context.font='32px Arial, sans-serif';context.fillText(`SHENZHEN LOW-ALTITUDE LOGISTICS  ·  ${station.code}`,58,181);signTexture.update();
+ const sign=new StandardMaterial('warehouse-sign-'+station.code,scene);sign.diffuseTexture=signTexture;sign.emissiveTexture=signTexture;sign.disableLighting=true;
  return {
   surface:pbr(scene,'warehouse-surface',new Color3(.055,.09,.105),.48,.54),
   structure:pbr(scene,'warehouse-structure',new Color3(.035,.12,.14),.7,.3),
@@ -54,10 +63,10 @@ function box(scene:Scene,root:TransformNode,meshes:AbstractMesh[],name:string,si
 
 export class Warehouse{
  readonly root:TransformNode;readonly meshes:AbstractMesh[]=[];readonly shadowCasters:AbstractMesh[]=[];readonly y:number;private materials:WarehouseMaterials;
- constructor(private scene:Scene,groundHeight:(x:number,z:number)=>number){
-  this.y=groundHeight(SHENZHEN_WAREHOUSE.x,SHENZHEN_WAREHOUSE.z)+.08;
-  this.root=new TransformNode('warehouse-root',scene);this.root.position.set(SHENZHEN_WAREHOUSE.x,this.y,SHENZHEN_WAREHOUSE.z);this.root.rotation.y=SHENZHEN_WAREHOUSE.heading;
-  this.materials=makeMaterials(scene);this.build();
+ constructor(private scene:Scene,groundHeight:(x:number,z:number)=>number,readonly station:FleetStation=FLEET_STATIONS[0]){
+  this.y=groundHeight(this.station.x,this.station.z)+.08;
+  this.root=new TransformNode('warehouse-root-'+this.station.code,scene);this.root.position.set(this.station.x,this.y,this.station.z);this.root.rotation.y=this.station.heading;
+  this.materials=makeMaterials(scene,this.station);this.build();
  }
  private track(mesh:AbstractMesh,casts=true){this.meshes.push(mesh);if(casts)this.shadowCasters.push(mesh);mesh.parent=this.root;return mesh;}
  private build(){
@@ -90,10 +99,10 @@ export class Warehouse{
   const antenna=MeshBuilder.CreateCylinder('warehouse-control-antenna',{diameterTop:0,diameterBottom:1.5,height:2.2,tessellation:20},scene);this.track(antenna);antenna.position.set(30,10.75,14.5);antenna.material=m.accent;mast.receiveShadows=true;
   for(const mesh of meshes)if(mesh instanceof Mesh&&mesh.name!=='warehouse-foundation'&&!this.shadowCasters.includes(mesh))this.shadowCasters.push(mesh);
  }
- get focus(){return {x:SHENZHEN_WAREHOUSE.x,y:this.y+3.5,z:SHENZHEN_WAREHOUSE.z};}
+ get focus(){return {x:this.station.x,y:this.y+3.5,z:this.station.z};}
  landingPadWorld(index=0){
   return Vector3.TransformCoordinates(WAREHOUSE_PAD_LAYOUT[Math.max(0,Math.min(WAREHOUSE_PAD_LAYOUT.length-1,index))],this.root.computeWorldMatrix(true));
  }
- get stats(){return {id:SHENZHEN_WAREHOUSE.id,name:SHENZHEN_WAREHOUSE.name,code:SHENZHEN_WAREHOUSE.code,district:SHENZHEN_WAREHOUSE.district,position:[SHENZHEN_WAREHOUSE.x,this.y,SHENZHEN_WAREHOUSE.z],capacity:SHENZHEN_WAREHOUSE.capacity,pads:SHENZHEN_WAREHOUSE.pads,meshes:this.meshes.length,enabled:this.root.isEnabled()};}
+ get stats(){return {id:this.station.id,name:this.station.name,code:this.station.code,district:this.station.district,position:[this.station.x,this.y,this.station.z],capacity:this.station.chargingSlots,pads:this.station.pads,meshes:this.meshes.length,enabled:this.root.isEnabled()};}
  dispose(){this.root.dispose(false,false);for(const material of Object.values(this.materials))material.dispose(true,true);}
 }

@@ -1186,6 +1186,10 @@ export function createBambooCorridor(scene:Scene,data:CityData,heightAt:(x:numbe
   if(streetCars.length){for(const mesh of streetCars)mesh.setEnabled(on);return;}
   for(const mesh of sedans)mesh.setEnabled(on);
  }
+ function setTreesEnabled(on:boolean){
+  tree.setEnabled(on&&!streetTrees.length);
+  for(const mesh of streetTrees)mesh.setEnabled(on);
+ }
  function setMode(next:'day'|'sunset'|'night'){mode=next;applyLamp();}
  function update(_time:number,x:number,z:number,_aerial=false){
   visible=corridorProject(x,z).d<520;applyVisible();
@@ -1200,7 +1204,7 @@ export function createBambooCorridor(scene:Scene,data:CityData,heightAt:(x:numbe
  applyLamp();applyVisible();
  const counts={curbs:plan.curbs.length,walks:plan.walks.length,edges:plan.edges.length,pits:plan.pits.length,lamps:plan.lamps.length,signals:plan.signals.length,crossings:plan.crossings.length,stops:plan.stops.length,parked:plan.parked.length,shopfronts:plan.plinths.length,decks:plan.decks.length,dashes:plan.dashes.length,rolling:plan.rolling.length};
  return {
-  plan,root,setMode,setEnabled,setStreetCarsEnabled,update,dispose,adoptStreetTrees,adoptParkedCars,
+  plan,root,setMode,setEnabled,setStreetCarsEnabled,setTreesEnabled,update,dispose,adoptStreetTrees,adoptParkedCars,
   get stats(){return {id:BAMBOO_CORRIDOR.id,name:BAMBOO_CORRIDOR.name,length:BAMBOO_CORRIDOR.length,halfWidth:BAMBOO_CORRIDOR.halfWidth,roadMetres:+plan.roadMetres.toFixed(1),roads:plan.roads,junctions:plan.junctions.length,enabled:root.isEnabled(),mode,phase,drawCalls:root.isEnabled()?meshes.length+extras.filter(m=>m.isEnabled()).length+streetTrees.length+streetCars.length:0,photoscrape:false,extraLights:0,...counts,streetTrees:streetTrees.length,streetCars:streetCars.length,shopLettering:CORRIDOR_SHOPS.map(s=>s.title),fictionalDisclosure:'深城纪·虚构品牌'};},
  };
 }

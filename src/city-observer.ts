@@ -20,12 +20,12 @@ export class CityObserver{
   const right=-dx*scale,up=dy*scale,s=Math.sin(this.yaw),c=Math.cos(this.yaw),sp=Math.sin(this.pitch);
   this.focus.x+=c*right+s*sp*up;this.focus.y+=Math.cos(this.pitch)*up;this.focus.z+=-s*right+c*sp*up;
  }
- zoom(delta:number){this.distance=Math.max(3,Math.min(3200,this.distance*Math.exp(delta*.0012)));}
+ zoom(delta:number){this.distance=Math.max(3,Math.min(90000,this.distance*Math.exp(delta*.0012)));}
  pose(){const horizontal=Math.cos(this.pitch)*this.distance;return {x:this.focus.x-Math.sin(this.yaw)*horizontal,y:this.focus.y+Math.sin(this.pitch)*this.distance,z:this.focus.z-Math.cos(this.yaw)*horizontal};}
- step(keys:Set<string>,dt:number,heightAt:(x:number,z:number)=>number,extent:number[]){
+ step(keys:Set<string>,dt:number,heightAt:(x:number,z:number)=>number,extent:number[],mapNavigation=false){
   const axis=(positive:string[],negative:string[])=>Number(positive.some(k=>keys.has(k)))-Number(negative.some(k=>keys.has(k)));
-  const forward=axis(['KeyW'],['KeyS']),right=axis(['KeyD'],['KeyA']),up=axis(['KeyE'],['KeyQ']);
-  this.look(axis(['ArrowRight'],['ArrowLeft'])*Math.min(dt,.05)*1.05,axis(['ArrowDown'],['ArrowUp'])*Math.min(dt,.05)*.8);
+  const forward=axis(mapNavigation?['KeyW','ArrowUp']:['KeyW'],mapNavigation?['KeyS','ArrowDown']:['KeyS']),right=axis(mapNavigation?['KeyD','ArrowRight']:['KeyD'],mapNavigation?['KeyA','ArrowLeft']:['KeyA']),up=axis(['KeyE'],['KeyQ']);
+  if(!mapNavigation)this.look(axis(['ArrowRight'],['ArrowLeft'])*Math.min(dt,.05)*1.05,axis(['ArrowDown'],['ArrowUp'])*Math.min(dt,.05)*.8);
   const length=Math.max(1,Math.hypot(forward,right,up));
   const speed=Math.max(4,Math.min(90,this.distance*.13))*(keys.has('ShiftLeft')||keys.has('ShiftRight')?3:1),d=speed*Math.min(dt,.05)/length;
   this.focus.x+=(Math.sin(this.yaw)*forward+Math.cos(this.yaw)*right)*d;
@@ -34,7 +34,8 @@ export class CityObserver{
   this.focus.x=Math.max(extent[0],Math.min(extent[2],this.focus.x));this.focus.z=Math.max(extent[1],Math.min(extent[3],this.focus.z));
   const p=this.pose(),floor=heightAt(p.x,p.z)+1.5;
   if(p.y<floor)this.focus.y+=floor-p.y;
-  if(p.y>2200)this.focus.y-=p.y-2200;
+  const ceiling=mapNavigation?120000:2200;
+  if(p.y>ceiling)this.focus.y-=p.y-ceiling;
  }
  get status(){return {active:this.active,position:this.pose(),focus:{...this.focus},yaw:this.yaw,pitch:this.pitch,distance:this.distance};}
 }

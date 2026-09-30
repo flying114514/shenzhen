@@ -5,10 +5,10 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
+    "dev": "vite --host 127.0.0.1 --configLoader runner",
     "prebuild": "node scripts/check-twin-assets.mjs",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build --configLoader runner",
+    "preview": "vite preview --host 127.0.0.1 --configLoader runner",
     "verify": "node scripts/verify-greenroute-drone.mjs"
   },
   "dependencies": {
