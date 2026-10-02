@@ -11,9 +11,9 @@ type SearchNode={index:number;xIndex:number;zIndex:number;x:number;z:number;y:nu
 type RouteSearch={points:RoutePoint[];distance:number;buildingClearance:number;terrainClearance:number;airspaceClearance:number;headwind:number};
 
 const PROFILES:Profile[]=[
- {id:'fastest',name:'最快到达',badge:'A',altitude:72,speed:15,distance:1,building:2.2,terrain:2,airspace:4,weather:1.5,lateral:.35,clearance:12},
- {id:'safest',name:'最低风险',badge:'B',altitude:112,speed:12,distance:1.08,building:18,terrain:13,airspace:34,weather:8,lateral:1,clearance:28},
- {id:'balanced',name:'综合推荐',badge:'C',altitude:92,speed:13.5,distance:1.03,building:9,terrain:7,airspace:17,weather:4,lateral:-1,clearance:20},
+ {id:'fastest',name:'最快到达',badge:'A',altitude:48,speed:15,distance:1,building:2.2,terrain:2,airspace:4,weather:1.5,lateral:.35,clearance:12},
+ {id:'safest',name:'最低风险',badge:'B',altitude:72,speed:12,distance:1.08,building:18,terrain:13,airspace:34,weather:8,lateral:1,clearance:28},
+ {id:'balanced',name:'综合推荐',badge:'C',altitude:60,speed:13.5,distance:1.03,building:9,terrain:7,airspace:17,weather:4,lateral:-1,clearance:20},
 ];
 const GRID=72,CELL=180;
 const clamp=(value:number,min:number,max:number)=>Math.max(min,Math.min(max,value));
@@ -63,10 +63,14 @@ export class LowAltitudeRoutePlanner{
   const result=this.search(start,destination,weather,profile);
   if(!result){this.lastConnectorFailure='a-star-no-path';return null;}
   const points=result.points.map(point=>({...point}));
-  // The search is performed at cruise altitude, but a connector must begin
-  // at the real pad/aircraft position and end at the requested flight point.
-  // Preserve those exact endpoint coordinates so dispatch cannot silently
-  // jump the aircraft to the planner's synthetic start point.
+  const cruiseY=(x:number,z:number)=>this.heightAt(x,z)+Math.max(72,profile.altitude);
+  // Preserve ground endpoints, but lift every connector waypoint into the
+  // same low-altitude cruise band. Otherwise station-to-origin and return
+  // connectors inherit grid endpoints that visually sit on the terrain.
+  for(let index=0;index<points.length;index++){
+   const point=points[index],isGroundEndpoint=(index===0&&from.y!==undefined)||(index===points.length-1&&to.y!==undefined);
+   if(!isGroundEndpoint)points[index]={...point,x:index===0&&from.y!==undefined?from.x:index===points.length-1&&to.y!==undefined?to.x:point.x,z:index===0&&from.y!==undefined?from.z:index===points.length-1&&to.y!==undefined?to.z:point.z,y:cruiseY(index===0&&from.y!==undefined?from.x:index===points.length-1&&to.y!==undefined?to.x:point.x,index===0&&from.y!==undefined?from.z:index===points.length-1&&to.y!==undefined?to.z:point.z)};
+  }
   if(from.y!==undefined)points[0]={...points[0],x:from.x,y:from.y,z:from.z};
   if(to.y!==undefined)points[points.length-1]={...points[points.length-1],x:to.x,y:to.y,z:to.z};
   if(this.isFlightPathSafe(points))return points;
@@ -107,8 +111,12 @@ export class LowAltitudeRoutePlanner{
  }
  private visible(a:RoutePoint,b:RoutePoint,altitude:number){return this.safeSegment(a,b);}
  private guided(start:{x:number;z:number},destination:{x:number;z:number},weather:WeatherSnapshot,profile:Profile,altitude:number){
-  const dx=destination.x-start.x,dz=destination.z-start.z,distance=Math.hypot(dx,dz);if(distance<180)return null;const normalX=-dz/distance,normalZ=dx/distance,startPoint={x:start.x,y:this.heightAt(start.x,start.z)+altitude,z:start.z},endPoint={x:destination.x,y:this.heightAt(destination.x,destination.z)+altitude,z:destination.z},base=clamp(distance*.42,150,460);
-  for(const sign of [1,-1])for(const scale of [1,1.35,1.75,2.2,2.8]){const offset=base*scale*sign,first={x:start.x+dx*.34+normalX*offset,z:start.z+dz*.34+normalZ*offset},second={x:start.x+dx*.66+normalX*offset,z:start.z+dz*.66+normalZ*offset},points=[startPoint,{x:first.x,y:this.heightAt(first.x,first.z)+altitude,z:first.z},{x:second.x,y:this.heightAt(second.x,second.z)+altitude,z:second.z},endPoint];if(points.slice(1,-1).some(point=>this.buildingClearance(point.x,point.y,point.z)<profile.clearance))continue;if(points.slice(1).some((point,index)=>!this.safeSegment(points[index],point)))continue;const result=this.finish(points,altitude,weather,true);if(result&&this.isFlightPathSafe(result.points))return result;}
+  const dx=destination.x-start.x,dz=destination.z-start.z,distance=Math.hypot(dx,dz);if(distance<180)return null;const normalX=-dz/distance,normalZ=dx/distance,startPoint={x:start.x,y:this.heightAt(start.x,start.z)+altitude,z:start.z},endPoint={x:destination.x,y:this.heightAt(destination.x,destination.z)+altitude,z:destination.z},base=clamp(distance*.28,80,Math.min(260,distance*.16));
+  const directPoints=[startPoint,endPoint];
+  const directResult=this.safeSegment(startPoint,endPoint)?this.finish(directPoints,altitude,weather,true):null;
+  if(directResult)return directResult;
+  const candidateOffsets=[base,-base,base*1.5,-base*1.5];
+  for(const offset of candidateOffsets){const first={x:start.x+dx*.38+normalX*offset,z:start.z+dz*.38+normalZ*offset},second={x:start.x+dx*.68+normalX*offset,z:start.z+dz*.68+normalZ*offset},points=[startPoint,{x:first.x,y:this.heightAt(first.x,first.z)+altitude,z:first.z},{x:second.x,y:this.heightAt(second.x,second.z)+altitude,z:second.z},endPoint];if(points.slice(1,-1).some(point=>this.buildingClearance(point.x,point.y,point.z)<profile.clearance))continue;if(points.slice(1).some((point,index)=>!this.safeSegment(points[index],point)))continue;const result=this.finish(points,altitude,weather,true);if(result&&this.isFlightPathSafe(result.points))return result;}
   return null;
  }
  private search(start:{x:number;z:number},destination:{x:number;z:number},weather:WeatherSnapshot,profile:Profile):RouteSearch|null{
@@ -127,7 +135,7 @@ export class LowAltitudeRoutePlanner{
   while(heap.length){const current=heap.pop()!;if(closed[current.index])continue;closed[current.index]=1;const distanceToDestination=Math.hypot(current.x-destination.x,current.z-destination.z);if(distanceToDestination<=GRID*1.5&&this.safeSegment(current,finalPoint)){const raw:RoutePoint[]=[];let cursor=current.index;while(cursor>=0){const node=nodes.get(cursor);if(!node)break;raw.push({x:node.x,y:node.y,z:node.z});cursor=parents[cursor];}raw.reverse();raw.push(finalPoint);const result=this.finish(raw,altitude,weather);if(result)return result;}
    for(const [dx,dz] of directions){const xIndex=current.xIndex+dx,zIndex=current.zIndex+dz;if(xIndex<0||xIndex>=columns||zIndex<0||zIndex>=rows)continue;const index=key(xIndex,zIndex);if(closed[index])continue;const next=point(xIndex,zIndex);if(!this.safeSegment(current,next))continue;
     const step=Math.hypot(next.x-current.x,next.z-current.z),clearance=this.buildingClearance(next.x,next.y,next.z),terminalDistance=Math.min(Math.hypot(next.x-start.x,next.z-start.z),Math.hypot(next.x-destination.x,next.z-destination.z));if(terminalDistance>96&&clearance<profile.clearance)continue;const buildingRisk=terminalDistance<=96?0:Math.max(0,(170-clearance)/170),terrainRise=Math.abs((next.y-current.y)/step),airspace=airspaceClearance(next.x,next.z,altitude),airRisk=airspace.insideCaution?1.5:Math.max(0,(210-airspace.clearance)/210),headwind=Math.max(0,bearingHeadwind(current.x,current.z,next.x,next.z,weather)),weatherRisk=(weather.precipitation*.18+headwind*.04)*profile.weather;
-    const guideDistance=profile.lateral===0?segmentDistance(next.x,next.z,start.x,start.z,destination.x,destination.z):Math.min(segmentDistance(next.x,next.z,start.x,start.z,guideX,guideZ),segmentDistance(next.x,next.z,guideX,guideZ,destination.x,destination.z)),guideCost=guideDistance*(profile.lateral===0?.02:.55),cost=step*(profile.distance+buildingRisk*profile.building+terrainRise*profile.terrain+airRisk*profile.airspace+weatherRisk)+guideCost,g=current.g+cost;if(g>=best[index])continue;
+    const guideDistance=profile.lateral===0?segmentDistance(next.x,next.z,start.x,start.z,destination.x,destination.z):segmentDistance(next.x,next.z,start.x,start.z,destination.x,destination.z),guideCost=guideDistance*.04,cost=step*(profile.distance+buildingRisk*profile.building+terrainRise*profile.terrain+airRisk*profile.airspace+weatherRisk)+guideCost,g=current.g+cost;if(g>=best[index])continue;
     const heuristic=Math.hypot(destination.x-next.x,destination.z-next.z)*profile.distance,node:SearchNode={index,xIndex,zIndex,...next,g,f:g+heuristic,parent:current.index,clearance};best[index]=g;parents[index]=current.index;nodes.set(index,node);heap.push(node);
    }
   }
@@ -158,9 +166,9 @@ export class LowAltitudeRoutePlanner{
   const curvedCandidates=distance>180?[1,-1].map(sign=>{const offset=bend*sign,a={x:first.x+dx*.34+normalX*offset,z:first.z+dz*.34+normalZ*offset},b={x:first.x+dx*.68+normalX*offset,z:first.z+dz*.68+normalZ*offset};return [first,{x:a.x,y:this.heightAt(a.x,a.z)+altitude,z:a.z},{x:b.x,y:this.heightAt(b.x,b.z)+altitude,z:b.z},last];}):[];
   const withLanding=(cruise:RoutePoint[])=>{
    if(cruise.length<2)return null;
-   const start=cruise[0],end=cruise[cruise.length-1];
-   const departureTarget=cruise.find(point=>Math.hypot(point.x-start.x,point.z-start.z)>1);
-   const approachTarget=[...cruise].reverse().find(point=>Math.hypot(point.x-end.x,point.z-end.z)>1);
+   const cruiseAltitude=Math.max(altitude,60),cruiseRaw=cruise.map(point=>({...point,y:this.heightAt(point.x,point.z)+cruiseAltitude})),start=cruiseRaw[0],end=cruiseRaw[cruiseRaw.length-1];
+   const departureTarget=cruiseRaw.find(point=>Math.hypot(point.x-start.x,point.z-start.z)>1);
+   const approachTarget=[...cruiseRaw].reverse().find(point=>Math.hypot(point.x-end.x,point.z-end.z)>1);
    if(departureTarget&&approachTarget){
     const offset=(endpoint:RoutePoint,target:RoutePoint)=>{
      const distance=Math.hypot(target.x-endpoint.x,target.z-endpoint.z);
@@ -169,11 +177,11 @@ export class LowAltitudeRoutePlanner{
     };
     // Limit diagonal takeoff/landing to a local 60 m approach. Do not delete
     // cruise endpoints and turn kilometres of cruise into a ground-level ramp.
-    const diagonal=[groundStart,offset(start,departureTarget),...cruise.slice(1,-1),offset(end,approachTarget),groundEnd];
+    const diagonal=[groundStart,offset(start,departureTarget),...cruiseRaw.slice(1,-1),offset(end,approachTarget),groundEnd];
     if(this.isFlightPathSafe(diagonal))return diagonal;
    }
    // Preserve the searched path if the local diagonal is obstructed.
-   const preserved=[groundStart,...cruise,groundEnd];
+   const preserved=[groundStart,...cruiseRaw,groundEnd];
    return this.isFlightPathSafe(preserved)?preserved:null;
   };
   let points:RoutePoint[]|null=null;
@@ -182,6 +190,10 @@ export class LowAltitudeRoutePlanner{
    if(points)break;
   }
   if(!points)return null;
+  const candidatePoints=points;
+  const finalized=candidatePoints.map((point,index)=>index===0||index===candidatePoints.length-1?point:{...point,y:this.heightAt(point.x,point.z)+Math.max(72,altitude)});
+  if(!this.isFlightPathSafe(finalized))return null;
+  points=finalized;
   let buildingClearance=220,terrainClearance=Infinity,airClearance=Infinity,headwind=0,segments=0;
   for(let index=1;index<points.length-1;index++){const point=points[index],terminalDistance=Math.min(Math.hypot(point.x-points[0].x,point.z-points[0].z),Math.hypot(point.x-points[points.length-1].x,point.z-points[points.length-1].z));if(terminalDistance>96)buildingClearance=Math.min(buildingClearance,this.buildingClearance(point.x,point.y,point.z));terrainClearance=Math.min(terrainClearance,point.y-this.heightAt(point.x,point.z));const airspace=airspaceClearance(point.x,point.z,altitude);airClearance=Math.min(airClearance,airspace.clearance);if(index<points.length-2){headwind+=Math.max(0,bearingHeadwind(point.x,point.z,points[index+1].x,points[index+1].z,weather));segments++;}}
   return {points,distance:pathDistance(points),buildingClearance,terrainClearance,airspaceClearance:airClearance,headwind:segments?headwind/segments:0};

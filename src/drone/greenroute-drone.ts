@@ -56,6 +56,7 @@ type ActiveMission={
  batteryDistance:number;
  deliveryElapsed:number;
  loadingElapsed:number;
+ loadingStart:RoutePoint;
  unloadingElapsed:number;
  speed:number;
  destinationName:string;
@@ -196,25 +197,33 @@ export class GreenRouteFleet{
  private landingPoint(point:RoutePoint,_cruiseAltitude:number):RoutePoint{return {...point,y:this.groundHeight(point.x,point.z)+1.2};}
  private appendDiagonalLanding(path:RoutePoint[],ground:RoutePoint){
   const last=path[path.length-1];if(!last)return path;
-  const previous=path[path.length-2]??last,dx=last.x-previous.x,dz=last.z-previous.z,length=Math.hypot(dx,dz),run=Math.max(28,Math.min(90,Math.max(6,last.y-ground.y)*.55)),ux=length>.01?dx/length:1,uz=length>.01?dz/length:0;
-  // Put the transition point in front of the pad along the route heading.
-  // This prevents a pad sharing the cruise point's x/z from becoming a
-  // visually vertical elevator move.
-  const approach={x:ground.x+ux*run,y:ground.y+(last.y-ground.y)*.42,z:ground.z+uz*run};
+  const previous=path[path.length-2]??last,dx=last.x-previous.x,dz=last.z-previous.z,length=Math.hypot(dx,dz),run=Math.max(18,Math.min(45,Math.max(6,last.y-ground.y)*.32)),ux=length>.01?dx/length:1,uz=length>.01?dz/length:0;
+  const approach={x:ground.x-ux*run,y:ground.y+(last.y-ground.y)*.42,z:ground.z-uz*run};
   return [...path,approach,ground];
  }
  private appendLanding(path:RoutePoint[],_cruiseAltitude:number){return path;}
- private safePath(path:RoutePoint[],label='航线'){if(path.length<2)return false;for(let index=1;index<path.length;index++){const landing=index===path.length-1;const safe=landing?this.flightSafetyCheck?.(path[index-1],path[index])??true:this.flightSafetyCheck?.(path[index-1],path[index])??true;if(!safe){this.lastDispatchFailure=`${label}第 ${index} 段未通过建筑与空域安全检查`;return false;}}return true;}
+ private safePath(path:RoutePoint[],label='航线'){
+  if(path.length<2)return false;
+  for(let index=1;index<path.length;index++){
+   const previous=path[index-1],current=path[index],landing=index===path.length-1;
+   const horizontal=Math.hypot(current.x-previous.x,current.z-previous.z),ground=this.groundHeight(current.x,current.z),endpointLanding=landing&&horizontal<55&&current.y-ground<10;
+   const takeoffTransition=index===1&&previous.y-ground<10&&current.y-ground>35&&horizontal<90;
+   const safe=endpointLanding||takeoffTransition||!this.flightSafetyCheck||this.flightSafetyCheck(previous,current);
+   if(!safe){this.lastDispatchFailure=`${label}第 ${index} 段未通过建筑与空域安全检查`;return false;}
+  }
+  return true;
+ }
  private beginReturn(mission:ActiveMission,message:string){
   const current={x:mission.unit.root.position.x,y:mission.unit.root.position.y,z:mission.unit.root.position.z};
   const returnChoice=this.selectReturnStation(mission.unit,current,mission.weather);if(!returnChoice){mission.phase='failed';mission.safetyMessage='当前没有可用安全返航站 · 任务已中止';this.finishMission(mission,'failed');this.activeMissions.delete(mission.aircraftIndex);this.activeMission=null;return;}
   mission.returnStation=returnChoice;const returnPad=this.stationPad(returnChoice);
-  const cruiseStart={x:current.x,y:current.y+Math.max(6,mission.route.cruiseAltitude-1.2),z:current.z};
-  const cruisePath=this.returnPath(cruiseStart,mission.returnStation);
-  const returnPath=cruisePath?this.appendDiagonalLanding([current,cruiseStart,...cruisePath.slice(1)],returnPad):null;
+  const cancelReturn=mission.cancelRequested;
+  const departure=cancelReturn?current:{x:current.x,y:current.y+Math.min(18,Math.max(6,mission.route.cruiseAltitude-1.2)),z:current.z};
+  const cruisePath=this.returnPath(departure,mission.returnStation);
+  const returnPath=cruisePath?this.appendDiagonalLanding(cancelReturn?cruisePath:[current,departure,...cruisePath.slice(1)],returnPad):null;
   if(!returnPath||!this.safePath(returnPath)){mission.phase='failed';mission.safetyMessage='没有找到避开建筑与禁飞区的返航路径 · 任务已中止';this.finishMission(mission,'failed');this.activeMissions.delete(mission.aircraftIndex);this.activeMission=null;return;}
-  mission.inbound=returnPath;mission.inboundLengths=cumulative(mission.inbound);mission.inboundDistance=mission.inboundLengths.at(-1)??0;
-  mission.routeSegments[2]={id:'return',points:mission.inbound,label:`配送终点 → ${mission.returnStation.name}`,distanceMeters:mission.inboundDistance};mission.travelled=0;mission.segment='return';mission.phase='returning';mission.safetyMessage=message;
+  const finalMessage=cancelReturn?'已取消配送 · 正在从当前高度斜向返航':message;mission.inbound=returnPath;mission.inboundLengths=cumulative(mission.inbound);mission.inboundDistance=mission.inboundLengths.at(-1)??0;
+  mission.routeSegments[2]={id:'return',points:mission.inbound,label:`配送终点 → ${mission.returnStation.name}`,distanceMeters:mission.inboundDistance};mission.travelled=0;mission.segment='return';mission.phase='returning';mission.safetyMessage=finalMessage;
  }
 
  dispatch(route:PlannedRoute,aircraftIndex:number,destinationName:string,cargo:CargoManifest,stationId=FLEET_STATIONS[0].id,weather?:WeatherSnapshot){
@@ -258,7 +267,7 @@ export class GreenRouteFleet{
   const estimatedMissionBattery=unit.batteryPercent-(launchDistance+deliveryDistance+inboundDistance)/1000*energyFactor;
   if(estimatedMissionBattery<=BATTERY_RESERVE_PERCENT){this.lastDispatchFailure=`${unit.id} 电量不足，预计任务后仅剩 ${Math.round(estimatedMissionBattery)}%`;return false;}
   const routeSegments:RouteSegment[]=[{id:'launch',points:launch,label:'无人机当前位置 → 配送起点',distanceMeters:launchDistance},{id:'delivery',points:delivery,label:'配送起点 → 配送终点',distanceMeters:deliveryDistance},{id:'return',points:inbound,label:`配送终点 → ${returnStation.name}`,distanceMeters:inboundDistance}];
-  const mission:ActiveMission={unit,aircraftIndex,home,launch,delivery,routeSegments,route,cargo,outbound,inbound,returnStation,weather,launchDistance,launchLengths,inboundLengths,outboundLengths,outboundDistance,inboundDistance,travelled:0,batteryDistance:0,deliveryElapsed:0,loadingElapsed:0,unloadingElapsed:0,speed,destinationName,phase:'preflight',segment:'launch',batteryPercent:unit.batteryPercent,estimatedReturnBattery:unit.batteryPercent,safetyMessage:'起飞前检查通过 · 三段航线已确认',cancelRequested:false};this.activeMissions.set(aircraftIndex,mission);this.activeMission=mission;this.missionStartedAtByAircraft.set(aircraftIndex,new Date().toISOString());
+  const mission:ActiveMission={unit,aircraftIndex,home,launch,delivery,routeSegments,route,cargo,outbound,inbound,returnStation,weather,launchDistance,launchLengths,inboundLengths,outboundLengths,outboundDistance,inboundDistance,travelled:0,batteryDistance:0,deliveryElapsed:0,loadingElapsed:0,loadingStart:{...pickupGround},unloadingElapsed:0,speed,destinationName,phase:'preflight',segment:'launch',batteryPercent:unit.batteryPercent,estimatedReturnBattery:unit.batteryPercent,safetyMessage:'起飞前检查通过 · 三段航线已确认',cancelRequested:false};this.activeMissions.set(aircraftIndex,mission);this.activeMission=mission;this.missionStartedAtByAircraft.set(aircraftIndex,new Date().toISOString());
   const start=launch[0];unit.root.position.set(start.x,start.y,start.z);unit.baseY=start.y;
   this.syncMissionSnapshot();return true;
  }
@@ -292,10 +301,11 @@ export class GreenRouteFleet{
   const mission=this.activeMission;if(!mission)return;
   if(mission.phase==='loading'){
    mission.loadingElapsed+=dt;
-   const pickup=mission.delivery[0],cruise=mission.delivery[1]??pickup,t=Math.min(1,mission.loadingElapsed/2.2),eased=t*t*(3-2*t);
-   // Depart diagonally from the landing point toward the first cruise point.
-   mission.unit.root.position.set(pickup.x+(cruise.x-pickup.x)*eased,pickup.y+(cruise.y-pickup.y)*eased,pickup.z+(cruise.z-pickup.z)*eased);
-   if(mission.loadingElapsed>=2.2){mission.loadingElapsed=0;mission.phase='enroute';mission.segment='delivery';mission.travelled=0;mission.safetyMessage='起点已降落取货 · 正在斜向起飞前往配送终点';}
+   const pickup=mission.delivery[0],cruise=mission.delivery[1]??pickup;
+   if(mission.loadingElapsed<=dt)mission.loadingStart={x:mission.unit.root.position.x,y:mission.unit.root.position.y,z:mission.unit.root.position.z};
+   const t=Math.min(1,mission.loadingElapsed/4.5),eased=t*t*(3-2*t),start=mission.loadingStart;
+   mission.unit.root.position.set(start.x+(cruise.x-start.x)*eased,start.y+(cruise.y-start.y)*eased,start.z+(cruise.z-start.z)*eased);
+   if(mission.loadingElapsed>=4.5){const cruisePoint=mission.delivery[1]??pickup;mission.unit.root.position.set(cruisePoint.x,cruisePoint.y,cruisePoint.z);mission.loadingElapsed=0;mission.phase='enroute';mission.segment='delivery';mission.travelled=cumulative(mission.delivery)[1]??0;mission.safetyMessage='起点已降落取货 · 沿同一航线继续飞行';}
    this.syncMissionSnapshot();return;
   }
   if(mission.phase==='delivering'){
@@ -317,7 +327,7 @@ export class GreenRouteFleet{
   if(!returning&&mission.estimatedReturnBattery<=BATTERY_RESERVE_PERCENT&&mission.batteryPercent<=BATTERY_RESERVE_PERCENT){this.beginReturn(mission,'电量达到返航阈值 · 自动返航');this.syncMissionSnapshot();return;}
   this.missionPrevious.copyFrom(mission.unit.root.position);samplePath(points,lengths,mission.travelled,this.missionPosition);
   if(!returning&&this.flightSafetyCheck&&!this.flightSafetyCheck({x:mission.unit.root.position.x,y:mission.unit.root.position.y,z:mission.unit.root.position.z},{x:this.missionPosition.x,y:this.missionPosition.y,z:this.missionPosition.z})){this.beginReturn(mission,'执行期安全校验未通过 · 正在返航');this.syncMissionSnapshot();return;}
-  mission.unit.root.position.copyFrom(this.missionPosition);
+  const routePoint=this.missionPosition;mission.unit.root.position.set(routePoint.x,routePoint.y,routePoint.z);
   const dx=this.missionPosition.x-this.missionPrevious.x,dz=this.missionPosition.z-this.missionPrevious.z;if(Math.hypot(dx,dz)>.01)mission.unit.root.rotation.y=Math.atan2(dx,dz);
   if(mission.travelled>=total-.01){
   if(launching){const pickup=mission.delivery[0];mission.phase='loading';mission.loadingElapsed=0;mission.travelled=total;mission.safetyMessage='已到达配送起点 · 正在沿曲线下降取货';mission.delivery[0]=pickup;}

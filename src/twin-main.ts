@@ -28,6 +28,7 @@ let mapLabels:ReturnType<typeof createTwinMapLabels>|undefined;
 let routePlanner:LowAltitudeRoutePlanner|undefined;
 let routeLayer:LowAltitudeRouteLayer|undefined;
 let plannedRoutes:PlannedRoute[]=[];
+let plannedRouteSets=new Map<string,PlannedRoute[]>();
 let activeRoute:RouteKind='balanced';
 let activeMission:MissionRequest|undefined;
 let droneFollowIndex:number|null=null;
@@ -45,7 +46,7 @@ let missionDestinations:MissionDestination[]=[
  {id:'sihai-park-dropoff',name:'四海公园配送点',detail:'南山 · 公园驿站',x:-6333.31,z:-2466.40},
 ];
 
-function hasActiveMissions(){return !!fleet?.missionActive||((fleet?.activeMissionCount??0)>0);}
+function reportResource(stage:string){resourceStep++;shell.setLoadingProgress(stage,Math.min(88,5+resourceStep*4));shell.setSystemState('初始化',false,stage);}
 
 const cityOverviewLandmark=()=>({
  id:SHENZHEN_WAREHOUSE.id,name:SHENZHEN_WAREHOUSE.name,area:'深圳 · 南山科技园',x:SHENZHEN_WAREHOUSE.x,z:SHENZHEN_WAREHOUSE.z,height:8,excludeRadius:0,
@@ -65,7 +66,7 @@ async function planMission(request:MissionRequest,silent=false){
  const origin=missionDestinations.find(item=>item.id===request.originId),destination=missionDestinations.find(item=>item.id===request.destinationId);
  if(!origin||!destination){shell.notify('未找到起点或终点地点');return;}
  const version=++planningVersion;activeMission={...request};shell.setPlanning(true,`正在规划 ${origin.name} → ${destination.name}`);await new Promise<void>(resolve=>window.setTimeout(resolve,40));
- const routes=await routePlanner.plan({x:origin.x,z:origin.z},destination,currentWeather);if(version!==planningVersion)return;plannedRoutes=routes;activeRoute=routes.some(route=>route.id==='balanced')?'balanced':routes[0]?.id??'fastest';routeLayer?.setRoutes(routes,activeRoute);shell.setRoutes(routes,activeRoute);
+ const routes=await routePlanner.plan({x:origin.x,z:origin.z},destination,currentWeather);if(version!==planningVersion)return;plannedRoutes=routes;plannedRouteSets.set(request.cargo.orderId,routes);activeRoute=routes.some(route=>route.id==='balanced')?'balanced':routes[0]?.id??'fastest';routeLayer?.setRoutes(routes,activeRoute);shell.setRoutes(routes,activeRoute);
  if(!routes.length)shell.notify('当前约束下未找到安全航线，请更换起终点或天气条件');else if(!silent)shell.notify(`已生成 ${routes.length} 条候选航线`);
 }
 
@@ -124,9 +125,10 @@ const shell=createTwinShell(ui,{
   const assignment=chooseAircraft(request,aircraftCandidates,FLEET_STATIONS,origin);
   if(!assignment){shell.notify(aircraftAvailabilityMessage(request,aircraftCandidates));return;}
   const aircraftIndex=assignment.aircraftIndex;
-  if(fleet.dispatch(planned,aircraftIndex,destination.name,request.cargo,assignment.stationId,currentWeather)){activeRoute=route;routeLayer?.setMissionSegments(fleet.mission.routeSegments??[]);routeLayer?.clearCandidateRoutes();shell.setRoutes([planned],route);shell.setMissionStatus(fleet.mission);shell.notify(`${fleet.units[aircraftIndex]?.id??'无人机'} 已接单 · 当前可继续派发其他订单 · 前往 ${destination.name}`);}else shell.notify(fleet.dispatchFailure||'当前没有可执行该任务的无人机');
+  if(fleet.dispatch(planned,aircraftIndex,destination.name,request.cargo,assignment.stationId,currentWeather)){activeRoute=route;routeLayer?.setMissionSegments(fleet.mission.routeSegments??[]);shell.setRoutes([planned],route);shell.setMissionStatus(fleet.mission);shell.notify(`${fleet.units[aircraftIndex]?.id??'无人机'} 已接单 · 当前可继续派发其他订单 · 前往 ${destination.name}`);}else shell.notify(fleet.dispatchFailure||'当前没有可执行该任务的无人机');
  },
  onMissionCancel:()=>{if(fleet?.cancelMission()){shell.setMissionStatus(fleet.mission);shell.notify('配送已取消 · 无人机正在返航');}},
+ onCancelOrder:orderId=>{const mission=(fleet?.missions??[]).find(item=>item.orderId===orderId);if(mission&&fleet?.cancelMission())shell.notify(`${orderId} 已取消 · 无人机正在返航`);},
 });
 shell.setWeather(currentWeather);
 shell.setMissionStatus({phase:'idle',progress:0,aircraftIndex:0,routeId:null,destinationName:'',orderId:'',cargoWeightKg:0,distanceRemaining:0,simulatedSpeed:0,batteryPercent:100,estimatedReturnBattery:100,safetyMessage:'等待任务'});
@@ -172,9 +174,9 @@ async function boot(){
   setView('home');
   let lastMissionKey='';
   world.onTick=dt=>{
-   fleet?.update(dt);if(droneFollowIndex!==null&&fleet)world?.setObserverFocus(fleet.focus(droneFollowIndex));mapLabels?.update(dt);const mission=fleet?.mission;if(mission){const key=`${mission.phase}:${Math.round(mission.progress*100)}:${mission.aircraftIndex}`;if(key!==lastMissionKey){lastMissionKey=key;routeLayer?.setMissionSegments(mission.routeSegments??[]);shell.setMissionStatus(mission);if(mission.phase==='delivering')shell.notify(`已到达 ${mission.destinationName} · 正在完成投递`);if(mission.phase==='completed')shell.notify(`配送完成 · ${mission.destinationName} · 无人机已返航`);}}
+   fleet?.update(dt);if(droneFollowIndex!==null&&fleet)world?.setObserverFocus(fleet.focus(droneFollowIndex));mapLabels?.update(dt);const mission=fleet?.mission;if(mission){const key=`${mission.phase}:${Math.round(mission.progress*100)}:${mission.aircraftIndex}`;if(key!==lastMissionKey){lastMissionKey=key;routeLayer?.setMissionSegments((fleet?.missions??[]).flatMap(item=>item.routeSegments?.map(segment=>({id:segment.id,label:segment.id,distanceMeters:0,points:segment.points.map(point=>({x:point.x,y:point.y,z:point.z}))}))??[]));shell.setMissionStatus(mission);if(mission.phase==='delivering')shell.notify(`已到达 ${mission.destinationName} · 正在完成投递`);if(mission.phase==='completed')shell.notify(`配送完成 · ${mission.destinationName} · 无人机已返航`);}}
    telemetryTick+=dt;if(telemetryTick<.25)return;telemetryTick=0;const coordinates=cameraCoordinates(),position=world!.observer.pose();
-   shell.update({fps:world!.engine.getFps(),longitude:coordinates.longitude,latitude:coordinates.latitude,altitude:position.y-world!.groundHeight(position.x,position.z),meshes:world!.scene.meshes.filter(mesh=>mesh.isEnabled()).length,overview:{extent:[world!.data.meta.extent[0],world!.data.meta.extent[1],world!.data.meta.extent[2],world!.data.meta.extent[3]],land:world!.data.land,coast:world!.data.coast,weather:{windDirection:currentWeather.windDirection,windSpeed:currentWeather.windSpeed},units:fleet?.stats.units.map(unit=>({x:unit.position[0],z:unit.position[2],active:unit.active,charging:unit.charging,id:unit.id}))??[],routes:(fleet?.missions??[]).flatMap(item=>item.routeSegments?.filter(segment=>segment.points.length>1).map(segment=>({id:`${item.aircraftIndex}-${item.orderId}-${segment.id}`,points:segment.points.map(point=>({x:point.x,z:point.z}))}))??[])}});
+   shell.update({fps:world!.engine.getFps(),longitude:coordinates.longitude,latitude:coordinates.latitude,altitude:position.y-world!.groundHeight(position.x,position.z),meshes:world!.scene.meshes.filter(mesh=>mesh.isEnabled()).length,overview:{extent:[world!.data.meta.extent[0],world!.data.meta.extent[1],world!.data.meta.extent[2],world!.data.meta.extent[3]],land:world!.data.land,coast:world!.data.coast,weather:{windDirection:currentWeather.windDirection,windSpeed:currentWeather.windSpeed},orders:(fleet?.missions??[]).map(item=>({aircraftIndex:item.aircraftIndex,phase:item.phase,progress:item.progress,destinationName:item.destinationName,orderId:item.orderId,batteryPercent:item.batteryPercent})),units:fleet?.stats.units.map(unit=>({x:unit.position[0],z:unit.position[2],active:unit.active,charging:unit.charging,id:unit.id}))??[],routes:(fleet?.missions??[]).flatMap(item=>item.routeSegments?.filter(segment=>segment.points.length>1).map(segment=>({id:`${item.aircraftIndex}-${item.orderId}-${segment.id}`,points:segment.points.map(point=>({x:point.x,z:point.z}))}))??[])}});
   };
   const coordinates=cameraCoordinates(),position=world.observer.pose();shell.update({fps:world.engine.getFps(),longitude:coordinates.longitude,latitude:coordinates.latitude,altitude:position.y-world.groundHeight(position.x,position.z),meshes:world.scene.meshes.filter(mesh=>mesh.isEnabled()).length});
   Object.defineProperty(window,'__SHENZHEN_TWIN__',{configurable:true,value:{
